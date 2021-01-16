@@ -36,7 +36,8 @@ import org.eclipse.microprofile.config.spi.ConfigSource;
 @Slf4j
 public class AwsParamStoreConfig implements ConfigSource {
     private final String AWS_REGION =  Optional.ofNullable(System.getenv("AWS_REGION")).orElse("us-east-1");
-    private final List<String> ssmPaths= List.of("/config/application_dev", "/config/application", "/config/application_" + Optional.ofNullable(System.getenv("ENVIRONMENT_NAME")).orElse("dev"));
+    private final List<String> ssmPaths= List.of("/config/application", "/config/application_" +
+            Optional.ofNullable(System.getenv("ENVIRONMENT_NAME")).orElse("dev"));
 
     public final Map<String, String> ssm = fetchSsmProperties();
 
@@ -62,6 +63,7 @@ public class AwsParamStoreConfig implements ConfigSource {
         if (ssm != null) {
             return ssm;
         }
+
         if (ssmClient == null) {
             ssmClient = AWSSimpleSystemsManagementClientBuilder
                     .standard()

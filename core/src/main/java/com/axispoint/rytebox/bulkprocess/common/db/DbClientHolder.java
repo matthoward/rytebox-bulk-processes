@@ -11,27 +11,29 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
 import com.axispoint.rytebox.bulkprocess.common.config.EncryptionUtil;
+import com.axispoint.rytebox.bulkprocess.common.dto.DbCredentials;
 
 @Slf4j
 public class DbClientHolder {
 
     private final EncryptionUtil encryptionUtil;
     private final ObjectMapper mapper;
+    private final String dbHost;
+    private final String dbPort;
 
     MySQLPool _client = null;
 
-    public DbClientHolder(EncryptionUtil encryptionUtil, ObjectMapper mapper) {
-        log.info("instantiating DbClientHolder... ");
+    public DbClientHolder(EncryptionUtil encryptionUtil, ObjectMapper mapper, String dbHost, String dbPort) {
         this.encryptionUtil = encryptionUtil;
         this.mapper = mapper;
+        this.dbHost = dbHost;
+        this.dbPort = dbPort;
     }
 
     @SneakyThrows
     public void init(JsonNode credentialsJson) {
         DbCredentials credentials = mapper.convertValue(credentialsJson, DbCredentials.class);
         _client = openPool(credentials);
-        log.info("DbClientHolder {}", this);
-        log.info("initialized dbclient as {}", _client);
     }
 
     @SneakyThrows
@@ -40,10 +42,9 @@ public class DbClientHolder {
     }
 
     private MySQLPool openPool(DbCredentials credentials) throws GeneralSecurityException {
-        log.info("openPool with {}", credentials);
         MySQLConnectOptions connectOptions = new MySQLConnectOptions()
-                  .setPort(credentials.getPort())
-                  .setHost(credentials.getHost())
+                  .setHost(dbHost)
+                  .setPort(Integer.valueOf(dbPort))
                   .setDatabase(credentials.getDatabase())
                   .setUser(credentials.getUsername())
                   .setPassword(encryptionUtil.decrypt(credentials.getEncryptedPassword()));

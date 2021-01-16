@@ -1,0 +1,274 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+# A CloudFormation template to create/configure the Bulk processes Lambdas and Step Functions
+
+Description: RyteBox BulkProcess Functions
+
+Parameters: 
+
+  NetworkStackName:
+    Type: String
+    Description: Name of an active CloudFormation stack that contains networking resources
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+
+  DatabaseStackName:
+    Type: String
+    Description: Name of an active CloudFormation stack that contains RDS resources
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+
+  EnvironmentName:
+    Type: String
+    Description: Environment name
+    Default: dev
+    AllowedValues:
+      - dev
+      - int
+      - qa
+      - demo
+      - uat
+      - prod
+    ConstraintDescription: Specify either dev, int, qa, uat or prod
+
+  MemorySize:
+    Type: Number
+    Description: Memory in MB allocated (128-10240)
+    MinValue: 128
+    MaxValue: 10240
+    Default: 2048
+
+Resources:
+
+  ExportBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub bulkdata.${EnvironmentName}.rytebox.net
+    DeletionPolicy: Retain
+
+  BulkProcessDynamoDbTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${EnvironmentName}_bulk_process
+      AttributeDefinitions:
+      - AttributeName: "process_id"
+        AttributeType: "S"
+      KeySchema:
+      - AttributeName: "process_id"
+        KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-BulkProcess-LambdaExecutionRole
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+              - Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/*
+                Effect: Allow
+                Action:
+                  - sts:AssumeRole
+              - Resource: !GetAtt ExportBucket.Arn
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+              - Resource: !Sub ${ExportBucket.Arn}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:RestoreObject
+                  - s3:DeleteObject
+              - Resource:
+                - !Sub arn:aws:kms:*:${AWS::AccountId}:key/*
+                - !Sub arn:aws:ssm:*:${AWS::AccountId}:parameter/*
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - ssm:GetParametersByPath
+
+
+  StateMachineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-BulkProcess-StateMachineExecutionRole
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+              - Resource: !GetAtt BulkProcessDynamoDbTable.Arn
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+              - Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-DqiExport:*
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+              - Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-DqiExport
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+
+
+  DqiExportFunction:
+    DependsOn: ExportBucket
+    Type: AWS::Lambda::Function
+    Properties:
+       Description: Asset Export - DQI format
+       Handler: io.quarkus.amazon.lambda.runtime.QuarkusStreamHandler::handleRequest
+       Runtime: java11
+       Role: !GetAtt LambdaExecutionRole.Arn
+       FunctionName: !Sub ${EnvironmentName}-DqiExport
+       Timeout: 900
+       MemorySize: !Sub ${MemorySize}
+       Code:
+           S3Bucket: maven-repo-rytebox.axispoint.com
+           S3Key: !Sub lambdas/${EnvironmentName}/ExportDqi/function.zip
+       VpcConfig:
+         SubnetIds:
+           - Fn::ImportValue: !Sub ${NetworkStackName}-PrivateSubnet1ID
+           - Fn::ImportValue: !Sub ${NetworkStackName}-PrivateSubnet2ID
+         SecurityGroupIds:
+           - Fn::ImportValue: !Sub ${NetworkStackName}-AppSecurityGroupID
+       Environment:
+         Variables:
+          ENVIRONMENT_NAME: !Sub ${EnvironmentName}
+          DATABASE_ENDPOINT: { Fn::ImportValue: !Sub "${DatabaseStackName}-DatabaseURL" }
+
+
+  BulkProcessStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub ${EnvironmentName}-DqiExport
+      DefinitionString:
+        !Sub
+          - |-
+            {
+              "Comment": "Rytebox Step Function to execute a re-entrant lambda until it is complete",
+              "StartAt": "Create Process In DynamoDB",
+              "States": {
+                "Create Process In DynamoDB": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::dynamodb:updateItem",
+                  "Parameters": {
+                    "TableName": "${tableName}",
+                    "UpdateExpression": "SET process_state = :state, start_time = :now",
+                    "ExpressionAttributeValues": {
+                      ":state": {
+                        "S": "Started"
+                      },
+                      ":now": {
+                        "S.$": "$$.State.EnteredTime"
+                      }
+                    },
+                    "ConditionExpression": "attribute_not_exists(process_id)",
+                    "Key": {
+                      "process_id": {
+                        "S.$": "$.processId"
+                      }
+                    }
+                  },
+                  "ResultPath": "$.dynamo",
+                  "Next": "Invoke Lambda function"
+                },
+                "Invoke Lambda function": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::lambda:invoke",
+                  "Parameters": {
+                    "FunctionName": "${lambdaArn}:$LATEST",
+                    "Payload.$": "$"
+                  },
+                  "OutputPath": "$.Payload",
+                  "ResultPath": "$",
+                  "Next": "Is Complete"
+                },
+                "Is Complete": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Variable": "$.done",
+                      "BooleanEquals": false,
+                      "Next": "Invoke Lambda function"
+                    }
+                  ],
+                  "Default": "Complete Process In DynamoDB"
+                },
+                "Complete Process In DynamoDB": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::dynamodb:updateItem",
+                  "Parameters": {
+                    "TableName": "${tableName}",
+                    "UpdateExpression": "SET process_state = :state, end_time = :now",
+                    "ExpressionAttributeValues": {
+                      ":state": {
+                        "S": "Complete"
+                      },
+                      ":now": {
+                        "S.$": "$$.State.EnteredTime"
+                      }
+                    },
+                    "Key": {
+                      "process_id": {
+                        "S.$": "$$.Execution.Input.processId"
+                      }
+                    }
+                  },
+                  "End": true
+                }
+              }
+            }
+          - {
+              lambdaArn: !GetAtt DqiExportFunction.Arn,
+              tableName: !Select [1, !Split ['/', !GetAtt BulkProcessDynamoDbTable.Arn]]
+          }
+      RoleArn: !GetAtt StateMachineExecutionRole.Arn

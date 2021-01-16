@@ -5,6 +5,9 @@ package com.axispoint.rytebox.bulkprocess.common.dto;
  *
  * isDone is used in the AWS Step Function that calls the lambda until it reports as done.
  *
+ * processId is used as the identifier for the StepFunction and must be unique within 90 days... it is also used as the
+ * S3 path for any output files that are written
+ *
  * iteration is a counter that is incremented after each execution. This is primarily used to name files for output in a
  * sequential order, so a bulk export can output partial datasets until finally all the iteration files can be merged
  *
@@ -18,6 +21,8 @@ package com.axispoint.rytebox.bulkprocess.common.dto;
  */
 public interface Reentrant<C> {
     boolean isDone();
+
+    String getProcessId();
 
     int getIteration();
 

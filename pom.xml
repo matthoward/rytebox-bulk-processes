@@ -6,14 +6,14 @@
 
     <groupId>com.axispoint.rytebox.bulkprocess</groupId>
     <artifactId>bulkprocess-parent</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>0.1-SNAPSHOT</version>
 
     <name>bulkprocess-parent</name>
     <packaging>pom</packaging>
 
     <modules>
         <module>core</module>
-        <module>common-dto</module>
+        <module>common</module>
         <module>export-dqi</module>
     </modules>
 

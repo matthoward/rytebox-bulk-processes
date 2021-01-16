@@ -2,6 +2,7 @@ package com.axispoint.rytebox.bulkprocess.common.dto;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -13,8 +14,8 @@ public class DqiInput implements Reentrant<List<Object>> {
     public static final String DB_CONFIG = "db";
     // TODO: probably need to add ES config as well, but could possibly just be picked up via AWS param store
 
-    private String outputBucket = "rbx-log-export";
-    private String outputPath = "dqi";
+    private String processId = UUID.randomUUID().toString();
+    private String outputBucket = "bulkdata.dev.rytebox.net";
     private String indexName;
     private ObjectNode esQuery;
 
@@ -22,7 +23,17 @@ public class DqiInput implements Reentrant<List<Object>> {
     private boolean isDone = false;
     private List<Object> continuation;
     private String exceptionMessage;
-    private Map<String, JsonNode> config;
+    private Map<String, ObjectNode> config;
+
+    public static DqiInput of(String outputBucket, String processId, String indexName, ObjectNode esQuery, Map<String, ObjectNode> config) {
+        DqiInput input = new DqiInput();
+        input.outputBucket = outputBucket;
+        input.processId = processId;
+        input.indexName = indexName;
+        input.esQuery = esQuery;
+        input.config = config;
+        return input;
+    }
 
     @Override
     public boolean isDone() {
